@@ -9,7 +9,11 @@ import (
 	logrusTest "github.com/sirupsen/logrus/hooks/test"
 )
 
-var Run = run
+var (
+	Run = run
+
+	HandleIncludedSources = handleIncludedSources
+)
 
 func MockLogger() (hook *logrusTest.Hook, restore func()) {
 	saved := logrusNew

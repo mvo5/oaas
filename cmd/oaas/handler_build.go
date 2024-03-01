@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/sirupsen/logrus"
@@ -66,11 +67,13 @@ func runOsbuild(buildDir string, control *controlJSON, output io.Writer) (string
 	flusher.Flush()
 
 	outputDir := filepath.Join(buildDir, "output")
+	storeDir := filepath.Join(buildDir, "store")
 	cmd := exec.Command(osbuildBinary)
 	for _, exp := range control.Exports {
 		cmd.Args = append(cmd.Args, []string{"--export", exp}...)
 	}
 	cmd.Args = append(cmd.Args, []string{"--output-dir", outputDir}...)
+	cmd.Args = append(cmd.Args, []string{"--store", storeDir}...)
 	cmd.Args = append(cmd.Args, filepath.Join(buildDir, "manifest.json"))
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -171,6 +174,54 @@ func handleManifestJSON(atar *tar.Reader, buildDir string) error {
 	return nil
 }
 
+func handleIncludedSources(atar *tar.Reader, buildDir string) error {
+	for {
+		hdr, err := atar.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("cannot read from tar %v", err)
+		}
+
+		// ensure we only allow "store/" things
+		if filepath.Clean(hdr.Name) != strings.TrimSuffix(hdr.Name, "/") {
+			return fmt.Errorf("name not clean: %v != %v", filepath.Clean(hdr.Name), hdr.Name)
+		}
+		if !strings.HasPrefix(hdr.Name, "store/") {
+			return fmt.Errorf("expected store/ prefix, got %v", hdr.Name)
+		}
+
+		// this assume "well" behaving tars, i.e. all dirs that lead
+		// up to the tar are included etc
+		target := filepath.Join(buildDir, hdr.Name)
+		mode := os.FileMode(hdr.Mode)
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.Mkdir(target, mode); err != nil {
+				return fmt.Errorf("unpack: %w", err)
+			}
+		case tar.TypeReg:
+			f, err := os.OpenFile(target, os.O_RDWR|os.O_CREATE, mode)
+			if err != nil {
+				return fmt.Errorf("unpack: %w", err)
+			}
+			defer f.Close()
+			if _, err := io.Copy(f, atar); err != nil {
+				return fmt.Errorf("unpack: %w", err)
+			}
+			if err := f.Close(); err != nil {
+				return fmt.Errorf("unpack: %w", err)
+			}
+		default:
+			return fmt.Errorf("unsupported tar type %v", hdr.Typeflag)
+		}
+		if err := os.Chtimes(target, hdr.AccessTime, hdr.ModTime); err != nil {
+			return fmt.Errorf("unpack: %w", err)
+		}
+	}
+}
+
 // test for real via:
 // curl -o - --data-binary "@./test.tar" -H "Content-Type: application/x-tar"  -X POST http://localhost:8001/api/v1/build
 func handleBuild(logger *logrus.Logger, config *Config) http.Handler {
@@ -216,7 +267,13 @@ func handleBuild(logger *logrus.Logger, config *Config) http.Handler {
 				http.Error(w, "manifest.json", http.StatusBadRequest)
 				return
 			}
-			// TODO: extract ".osbuild/sources" here too from the tar
+			// extract ".osbuild/sources" here too from the tar
+			if err := handleIncludedSources(atar, buildDir); err != nil {
+				logger.Error(err)
+				http.Error(w, "included sources/", http.StatusBadRequest)
+				return
+			}
+
 			w.WriteHeader(http.StatusCreated)
 
 			// run osbuild and stream the output to the client
