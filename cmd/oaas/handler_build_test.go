@@ -81,11 +81,13 @@ func TestBuildIntegration(t *testing.T) {
 	endpoint := baseURL + "api/v1/build"
 
 	// osbuild is called with --export tree and then the manifest.json
-	restore := main.MockOsbuildBinary(t, fmt.Sprintf(`#!/bin/sh
+	restore := main.MockOsbuildBinary(t, fmt.Sprintf(`#!/bin/sh -e
 # echo our inputs for the test to validate
 echo fake-osbuild "$1" "$2" "$3" "$4" "$5" "$6"
 echo ---
 cat "$7"
+
+test "$MY" = "env"
 
 # simulate output
 mkdir -p %[1]s/build/output
@@ -93,7 +95,7 @@ echo "fake-build-result" > %[1]s/build/output/disk.img
 `, baseBuildDir))
 	defer restore()
 
-	buf := makeTestPost(t, `{"exports": ["tree"]}`, `{"fake": "manifest"}`)
+	buf := makeTestPost(t, `{"exports": ["tree"], "environments": ["MY=env"]}`, `{"fake": "manifest"}`)
 	rsp, err := http.Post(endpoint, "application/x-tar", buf)
 	assert.NoError(t, err)
 

@@ -72,6 +72,7 @@ func runOsbuild(buildDir string, control *controlJSON, output io.Writer) (string
 	for _, exp := range control.Exports {
 		cmd.Args = append(cmd.Args, []string{"--export", exp}...)
 	}
+	cmd.Env = append(cmd.Env, control.Environments...)
 	cmd.Args = append(cmd.Args, []string{"--output-dir", outputDir}...)
 	cmd.Args = append(cmd.Args, []string{"--store", storeDir}...)
 	cmd.Args = append(cmd.Args, filepath.Join(buildDir, "manifest.json"))
@@ -104,7 +105,8 @@ func runOsbuild(buildDir string, control *controlJSON, output io.Writer) (string
 }
 
 type controlJSON struct {
-	Exports []string `json:"exports"`
+	Environments []string `json:"environments"`
+	Exports      []string `json:"exports"`
 }
 
 func mustRead(atar *tar.Reader, name string) error {
