@@ -176,6 +176,80 @@ func handleManifestJSON(atar *tar.Reader, buildDir string) error {
 	return nil
 }
 
+func bufZero(buf []byte) bool {
+	for _, b := range buf {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func doHandleSparse(dst io.WriteSeeker, src io.Reader, buf []byte, nr int64, written *int64) (bool, error) {
+	if !bufZero(buf) {
+		return false, nil
+	}
+
+	if _, err := dst.Seek(int64(nr), os.SEEK_CUR); err != nil {
+		return false, err
+	}
+	*written = nr
+
+	return true, nil
+}
+
+func copyWithSparse(w io.Writer, src io.Reader) (written int64, err error) {
+	dst, ok := w.(io.WriteSeeker)
+	if !ok {
+		return 0, fmt.Errorf("cannot use copyWithFile wihtout a writeSeeker, got %T", w)
+	}
+
+	// use a small buf here because our algorithm is very naive and
+	// we only skip over holes at least the size of the buffer
+	buf := make([]byte, 1*1024)
+	// copied from golang:io.copyBuffer()
+	for {
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			// this is the only addition to
+			// io.copyBuffer(), everything else in this
+			// loop is identical
+			handled, err := doHandleSparse(dst, src, buf, int64(nr), &written)
+			if err != nil {
+				return 0, fmt.Errorf("sparse: %w", err)
+			}
+			if handled {
+				continue
+			}
+			// -------------------------------------------
+
+			nw, ew := dst.Write(buf[0:nr])
+			if nw < 0 || nr < nw {
+				nw = 0
+				if ew == nil {
+					ew = fmt.Errorf("internal errror: invalid write result")
+				}
+			}
+			written += int64(nw)
+			if ew != nil {
+				err = ew
+				break
+			}
+			if nr != nw {
+				err = io.ErrShortWrite
+				break
+			}
+		}
+		if er != nil {
+			if er != io.EOF {
+				err = er
+			}
+			break
+		}
+	}
+	return written, err
+}
+
 func handleIncludedSources(atar *tar.Reader, buildDir string) error {
 	for {
 		hdr, err := atar.Next()
@@ -203,15 +277,26 @@ func handleIncludedSources(atar *tar.Reader, buildDir string) error {
 			if err := os.Mkdir(target, mode); err != nil {
 				return fmt.Errorf("unpack: %w", err)
 			}
-		case tar.TypeReg:
+		case tar.TypeReg, tar.TypeGNUSparse:
 			f, err := os.OpenFile(target, os.O_RDWR|os.O_CREATE, mode)
 			if err != nil {
 				return fmt.Errorf("unpack: %w", err)
 			}
 			defer f.Close()
-			if _, err := io.Copy(f, atar); err != nil {
-				return fmt.Errorf("unpack: %w", err)
+
+			if hdr.Typeflag == tar.TypeGNUSparse {
+				if err := f.Truncate(hdr.Size); err != nil {
+					return fmt.Errorf("truncate: %w", err)
+				}
+				if _, err := copyWithSparse(f, atar); err != nil {
+					return fmt.Errorf("unpack sparse: %w", err)
+				}
+			} else {
+				if _, err := io.Copy(f, atar); err != nil {
+					return fmt.Errorf("unpack: %w", err)
+				}
 			}
+
 			if err := f.Close(); err != nil {
 				return fmt.Errorf("unpack: %w", err)
 			}
