@@ -63,7 +63,7 @@ func runTestServer(t *testing.T) (baseURL, buildBaseDir string, loggerHook *logr
 	args := []string{
 		"-host", host,
 		"-port", port,
-		"-builddirbase", buildBaseDir,
+		"-build-path", buildBaseDir,
 	}
 	go main.Run(ctx, args, os.Getenv)
 

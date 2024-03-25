@@ -10,7 +10,7 @@ $ go test ./...
 to run
 ```
 $ cd cmd/oaas/
-$ go build && sudo ./oaas -builddirbase /var/tmp/my-build
+$ go build && sudo ./oaas -build-path /var/tmp/my-build
 ```
 then from the client:
 ```
