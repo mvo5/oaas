@@ -147,12 +147,15 @@ echo "fake-build-result" > %[1]s/build/output/image/disk.img
 }
 
 func TestBuildErrorsForMultipleBuilds(t *testing.T) {
-	restore := main.MockOsbuildBinary(t, `#!/bin/sh
-`)
-	defer restore()
-
-	baseURL, _, loggerHook := runTestServer(t)
+	baseURL, buildDir, loggerHook := runTestServer(t)
 	endpoint := baseURL + "api/v1/build"
+
+	restore := main.MockOsbuildBinary(t, fmt.Sprintf(`#!/bin/sh
+
+mkdir -p %[1]s/build/output/image
+echo "fake-build-result" > %[1]s/build/output/image/disk.img
+`, buildDir))
+	defer restore()
 
 	buf := makeTestPost(t, `{"exports": ["tree"]}`, `{"fake": "manifest"}`)
 	rsp, err := http.Post(endpoint, "application/x-tar", buf)
