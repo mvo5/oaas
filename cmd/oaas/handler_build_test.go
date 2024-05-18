@@ -296,3 +296,25 @@ echo "fake-build-result" > %[1]s/build/output/image/disk.img
 		assert.True(t, timeSinceStart < expectedTimeSinceStart, fmt.Sprintf("time since start %v bigger than expected %v", timeSinceStart, expectedTimeSinceStart))
 	}
 }
+
+func TestBuildErrorHandlingTar(t *testing.T) {
+	restore := main.MockOsbuildBinary(t, `#!/bin/sh
+
+# not creating an output dir, this will lead to errors from the "tar"
+# step
+`)
+	defer restore()
+
+	baseURL, _, loggerHook := runTestServer(t)
+	endpoint := baseURL + "api/v1/build"
+
+	buf := makeTestPost(t, `{"exports": ["tree"]}`, `{"fake": "manifest"}`)
+	rsp, err := http.Post(endpoint, "application/x-tar", buf)
+	assert.NoError(t, err)
+	assert.Equal(t, rsp.StatusCode, http.StatusCreated)
+
+	body, err := ioutil.ReadAll(rsp.Body)
+	assert.NoError(t, err)
+	assert.Contains(t, string(body), "cannot tar output directory:")
+	assert.Contains(t, loggerHook.LastEntry().Message, "cannot tar output directory:")
+}
