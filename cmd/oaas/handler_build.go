@@ -101,6 +101,19 @@ func runOsbuild(buildDir string, control *controlJSON, output io.Writer) (string
 		return "", err
 	}
 
+	cmd = exec.Command(
+		"tar",
+		"-Scf",
+		filepath.Join(outputDir, "output.tar"),
+		"output",
+	)
+	cmd.Dir = buildDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		logrus.Errorf("Failed creating result tarball: %v", err)
+		return "", fmt.Errorf("cannot tar output directory: %v, output:\n%s", err, out)
+	}
+	logrus.Infof("tar output:\n%s", out)
 	return outputDir, nil
 }
 

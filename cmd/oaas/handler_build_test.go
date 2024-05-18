@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -90,8 +91,8 @@ cat "$7"
 test "$MY" = "env"
 
 # simulate output
-mkdir -p %[1]s/build/output
-echo "fake-build-result" > %[1]s/build/output/disk.img
+mkdir -p %[1]s/build/output/image
+echo "fake-build-result" > %[1]s/build/output/image/disk.img
 `, baseBuildDir))
 	defer restore()
 
@@ -122,13 +123,27 @@ echo "fake-build-result" > %[1]s/build/output/disk.img
 	assert.True(t, stat.IsDir())
 
 	// now get the result
-	endpoint = baseURL + "api/v1/result/disk.img"
+	endpoint = baseURL + "api/v1/result/image/disk.img"
 	rsp, err = http.Get(endpoint)
 	assert.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rsp.StatusCode)
 	body, err := ioutil.ReadAll(rsp.Body)
 	assert.NoError(t, err)
 	assert.Equal(t, "fake-build-result\n", string(body))
+
+	// check that the output tarball has the disk in it
+	endpoint = baseURL + "api/v1/result/output.tar"
+	rsp, err = http.Get(endpoint)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rsp.StatusCode)
+	body, err = ioutil.ReadAll(rsp.Body)
+	assert.NoError(t, err)
+	tarPath := filepath.Join(baseBuildDir, "output.tar")
+	assert.NoError(t, os.WriteFile(tarPath, body, 0644))
+	cmd := exec.Command("tar", "-tf", tarPath)
+	out, err := cmd.Output()
+	assert.NoError(t, err)
+	assert.Equal(t, "output/\noutput/image/\noutput/image/disk.img\n", string(out))
 }
 
 func TestBuildErrorsForMultipleBuilds(t *testing.T) {
