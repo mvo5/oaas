@@ -2,7 +2,6 @@ package main
 
 import (
 	"archive/tar"
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +12,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/sirupsen/logrus"
 )
@@ -27,48 +25,42 @@ var (
 	ErrAlreadyBuilding = errors.New("build already starte")
 )
 
-type writeFlusher interface {
-	io.Writer
-	http.Flusher
+type writeFlusher struct {
+	w       io.Writer
+	flusher http.Flusher
 }
 
-func followLineOutput(wg *sync.WaitGroup, r io.Reader, w writeFlusher, logf io.Writer) {
-	defer wg.Done()
-
-	reader := bufio.NewReader(r)
-	for {
-		line, err := reader.ReadString('\n')
-		// ReadString can return both an error and a valid line :/
-		if len(line) > 0 {
-			// stream output
-			w.Write([]byte(line))
-			w.Flush()
-			// also write to the log file
-			logf.Write([]byte(line))
-		}
-		if err != nil {
-			return
-		}
+func (wf *writeFlusher) Write(p []byte) (n int, err error) {
+	n, err = wf.w.Write(p)
+	if wf.flusher != nil {
+		wf.flusher.Flush()
 	}
+	return n, err
 }
 
 func runOsbuild(buildDir string, control *controlJSON, output io.Writer) (string, error) {
-	flusher, ok := output.(writeFlusher)
+	flusher, ok := output.(http.Flusher)
 	if !ok {
 		return "", fmt.Errorf("cannot stream the output")
 	}
-
+	// stream output over http
+	wf := writeFlusher{w: output, flusher: flusher}
+	// and also write to our internal log
 	logf, err := os.Create(filepath.Join(buildDir, "build.log"))
 	if err != nil {
 		return "", fmt.Errorf("cannot create log file: %v", err)
 	}
 	defer logf.Close()
-	flusher.Write([]byte(fmt.Sprintf("starting %s build\n", buildDir)))
-	flusher.Flush()
+
+	// use multi writer to get same output for stream and log
+	mw := io.MultiWriter(&wf, logf)
+	mw.Write([]byte(fmt.Sprintf("starting %s build\n", buildDir)))
 
 	outputDir := filepath.Join(buildDir, "output")
 	storeDir := filepath.Join(buildDir, "store")
 	cmd := exec.Command(osbuildBinary)
+	cmd.Stdout = mw
+	cmd.Stderr = mw
 	for _, exp := range control.Exports {
 		cmd.Args = append(cmd.Args, []string{"--export", exp}...)
 	}
@@ -76,28 +68,14 @@ func runOsbuild(buildDir string, control *controlJSON, output io.Writer) (string
 	cmd.Args = append(cmd.Args, []string{"--output-dir", outputDir}...)
 	cmd.Args = append(cmd.Args, []string{"--store", storeDir}...)
 	cmd.Args = append(cmd.Args, filepath.Join(buildDir, "manifest.json"))
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return "", err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return "", err
-	}
 	if err := cmd.Start(); err != nil {
 		return "", err
 	}
 
-	// ensure all output is flushed before exiting
-	// TODO: test this
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() { followLineOutput(&wg, stdout, flusher, logf) }()
-	wg.Add(1)
-	go func() { followLineOutput(&wg, stderr, flusher, logf) }()
-	wg.Wait()
-
 	if err := cmd.Wait(); err != nil {
+		// we cannot use "http.Error()" here because the http
+		// header was already set to "201" when we started streaming
+		mw.Write([]byte(fmt.Sprintf("cannot run osbuild: %v", err)))
 		return "", err
 	}
 
@@ -110,8 +88,10 @@ func runOsbuild(buildDir string, control *controlJSON, output io.Writer) (string
 	cmd.Dir = buildDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		logrus.Errorf("Failed creating result tarball: %v", err)
-		return "", fmt.Errorf("cannot tar output directory: %v, output:\n%s", err, out)
+		err = fmt.Errorf("cannot tar output directory: %w, output:\n%s", err, out)
+		logrus.Errorf(err.Error())
+		mw.Write([]byte(err.Error()))
+		return "", err
 	}
 	logrus.Infof("tar output:\n%s", out)
 	return outputDir, nil
@@ -299,7 +279,6 @@ func handleBuild(logger *logrus.Logger, config *Config) http.Handler {
 			}
 			if err != nil {
 				logger.Errorf("canot run osbuild: %v", err)
-				http.Error(w, "cannot run osbuild", http.StatusInternalServerError)
 				return
 			}
 		},

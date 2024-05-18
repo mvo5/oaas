@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
@@ -99,12 +100,14 @@ echo "fake-build-result" > %[1]s/build/output/image/disk.img
 	buf := makeTestPost(t, `{"exports": ["tree"], "environments": ["MY=env"]}`, `{"fake": "manifest"}`)
 	rsp, err := http.Post(endpoint, "application/x-tar", buf)
 	assert.NoError(t, err)
+	defer ioutil.ReadAll(rsp.Body)
 
 	assert.Equal(t, rsp.StatusCode, http.StatusCreated)
 	reader := bufio.NewReader(rsp.Body)
 	line, err := reader.ReadString('\n')
 	assert.NoError(t, err)
-	assert.Regexp(t, fmt.Sprintf("starting %s/build build", baseBuildDir), line)
+	headerLine := fmt.Sprintf("starting %s/build build", baseBuildDir)
+	assert.Regexp(t, headerLine, line)
 
 	// check that we get the output of osbuild streamed to us
 	expectedContent := fmt.Sprintf(`fake-osbuild --export tree --output-dir %[1]s/build/output --store %[1]s/build/store
@@ -116,7 +119,8 @@ echo "fake-build-result" > %[1]s/build/output/image/disk.img
 	// check log too
 	logFileContent, err := ioutil.ReadFile(filepath.Join(baseBuildDir, "build/build.log"))
 	assert.NoError(t, err)
-	assert.Equal(t, string(logFileContent), expectedContent)
+	expectedLogContent := headerLine + "\n" + expectedContent
+	assert.Equal(t, expectedLogContent, string(logFileContent))
 	// check that the "store" dir got created
 	stat, err := os.Stat(filepath.Join(baseBuildDir, "build/store"))
 	assert.NoError(t, err)
@@ -205,5 +209,90 @@ func TestHandleIncludedSourcesBadTypes(t *testing.T) {
 
 		err = main.HandleIncludedSources(tar.NewReader(buf), tmpdir)
 		assert.EqualError(t, err, fmt.Sprintf("unsupported tar type %v", badType))
+	}
+}
+
+func TestBuildIntegrationOsbuildError(t *testing.T) {
+	baseURL, buildDir, _ := runTestServer(t)
+	endpoint := baseURL + "api/v1/build"
+
+	// osbuild is called with --export tree and then the manifest.json
+	restore := main.MockOsbuildBinary(t, `#!/bin/sh -e
+# simulate failure
+echo "err on stdout"
+>&2 echo "err on stderr"
+exit 23
+`)
+	defer restore()
+
+	buf := makeTestPost(t, `{"exports": ["tree"], "environments": ["MY=env"]}`, `{"fake": "manifest"}`)
+	rsp, err := http.Post(endpoint, "application/x-tar", buf)
+	assert.NoError(t, err)
+	defer ioutil.ReadAll(rsp.Body)
+
+	assert.Equal(t, rsp.StatusCode, http.StatusCreated)
+	reader := bufio.NewReader(rsp.Body)
+	content, err := ioutil.ReadAll(reader)
+	assert.NoError(t, err)
+	expectedContent := fmt.Sprintf(`starting %[1]s/build build
+err on stdout
+err on stderr
+cannot run osbuild: exit status 23`, buildDir)
+	assert.Equal(t, expectedContent, string(content))
+
+	// check that the result is an error and we get the log
+	endpoint = baseURL + "api/v1/result/image/disk.img"
+	rsp, err = http.Get(endpoint)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rsp.StatusCode)
+	reader = bufio.NewReader(rsp.Body)
+	content, err = ioutil.ReadAll(reader)
+	assert.NoError(t, err)
+	assert.Equal(t, "build failed\n"+expectedContent, string(content))
+}
+
+func TestBuildStreamsOutput(t *testing.T) {
+	baseURL, baseBuildDir, _ := runTestServer(t)
+	endpoint := baseURL + "api/v1/build"
+
+	restore := main.MockOsbuildBinary(t, fmt.Sprintf(`#!/bin/sh -e
+for i in $(seq 5); do
+   echo "line-$i"
+   sleep 0.2
+done
+
+# simulate output
+mkdir -p %[1]s/build/output/image
+echo "fake-build-result" > %[1]s/build/output/image/disk.img
+`, baseBuildDir))
+	defer restore()
+
+	buf := makeTestPost(t, `{"exports": ["tree"], "environments": ["MY=env"]}`, `{"fake": "manifest"}`)
+	rsp, err := http.Post(endpoint, "application/x-tar", buf)
+	assert.NoError(t, err)
+	defer ioutil.ReadAll(rsp.Body)
+
+	assert.Equal(t, rsp.StatusCode, http.StatusCreated)
+	reader := bufio.NewReader(rsp.Body)
+	line, err := reader.ReadString('\n')
+	assert.NoError(t, err)
+	headerLine := fmt.Sprintf("starting %s/build build\n", baseBuildDir)
+	assert.Equal(t, headerLine, line)
+
+	// This is not ideal, as it's timing dependend, ideally the script
+	// would signal somehow that it just echoed a line and the test
+	// code then expects to recieve it within e.g. 100ms.
+	start := time.Now()
+	for i := 1; i < 6; i++ {
+		line, err := reader.ReadString('\n')
+		assert.NoError(t, err)
+		assert.Equal(t, fmt.Sprintf("line-%v\n", i), line)
+		timeSinceStart := time.Now().Sub(start)
+		// we expeced a line every 200ms and add a grace
+		// period of 100ms for slow systems (should be plenty
+		// but super busy GH runners can take a long time to
+		// do anything)
+		expectedTimeSinceStart := time.Duration(i)*200*time.Millisecond + (100 * time.Millisecond)
+		assert.True(t, timeSinceStart < expectedTimeSinceStart, fmt.Sprintf("time since start %v bigger than expected %v", timeSinceStart, expectedTimeSinceStart))
 	}
 }
