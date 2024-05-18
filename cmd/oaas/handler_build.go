@@ -11,9 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
+
+	"golang.org/x/exp/slices"
 
 	"github.com/sirupsen/logrus"
 )
