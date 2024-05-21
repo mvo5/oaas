@@ -85,9 +85,9 @@ func TestBuildIntegration(t *testing.T) {
 	// osbuild is called with --export tree and then the manifest.json
 	restore := main.MockOsbuildBinary(t, fmt.Sprintf(`#!/bin/sh -e
 # echo our inputs for the test to validate
-echo fake-osbuild "$1" "$2" "$3" "$4" "$5" "$6"
+echo fake-osbuild "$1" "$2" "$3" "$4" "$5" "$6" "$7"
 echo ---
-cat "$7"
+cat "$8"
 
 test "$MY" = "env"
 
@@ -104,13 +104,8 @@ echo "fake-build-result" > %[1]s/build/output/image/disk.img
 
 	assert.Equal(t, rsp.StatusCode, http.StatusCreated)
 	reader := bufio.NewReader(rsp.Body)
-	line, err := reader.ReadString('\n')
-	assert.NoError(t, err)
-	headerLine := fmt.Sprintf("starting %s/build build", baseBuildDir)
-	assert.Regexp(t, headerLine, line)
-
 	// check that we get the output of osbuild streamed to us
-	expectedContent := fmt.Sprintf(`fake-osbuild --export tree --output-dir %[1]s/build/output --store %[1]s/build/store
+	expectedContent := fmt.Sprintf(`fake-osbuild --export tree --output-dir %[1]s/build/output --store %[1]s/build/store --json
 ---
 {"fake": "manifest"}`, baseBuildDir)
 	content, err := ioutil.ReadAll(reader)
@@ -119,8 +114,7 @@ echo "fake-build-result" > %[1]s/build/output/image/disk.img
 	// check log too
 	logFileContent, err := ioutil.ReadFile(filepath.Join(baseBuildDir, "build/build.log"))
 	assert.NoError(t, err)
-	expectedLogContent := headerLine + "\n" + expectedContent
-	assert.Equal(t, expectedLogContent, string(logFileContent))
+	assert.Equal(t, expectedContent, string(logFileContent))
 	// check that the "store" dir got created
 	stat, err := os.Stat(filepath.Join(baseBuildDir, "build/store"))
 	assert.NoError(t, err)
@@ -216,7 +210,7 @@ func TestHandleIncludedSourcesBadTypes(t *testing.T) {
 }
 
 func TestBuildIntegrationOsbuildError(t *testing.T) {
-	baseURL, buildDir, _ := runTestServer(t)
+	baseURL, _, _ := runTestServer(t)
 	endpoint := baseURL + "api/v1/build"
 
 	// osbuild is called with --export tree and then the manifest.json
@@ -237,10 +231,9 @@ exit 23
 	reader := bufio.NewReader(rsp.Body)
 	content, err := ioutil.ReadAll(reader)
 	assert.NoError(t, err)
-	expectedContent := fmt.Sprintf(`starting %[1]s/build build
-err on stdout
+	expectedContent := `err on stdout
 err on stderr
-cannot run osbuild: exit status 23`, buildDir)
+cannot run osbuild: exit status 23`
 	assert.Equal(t, expectedContent, string(content))
 
 	// check that the result is an error and we get the log
@@ -277,10 +270,6 @@ echo "fake-build-result" > %[1]s/build/output/image/disk.img
 
 	assert.Equal(t, rsp.StatusCode, http.StatusCreated)
 	reader := bufio.NewReader(rsp.Body)
-	line, err := reader.ReadString('\n')
-	assert.NoError(t, err)
-	headerLine := fmt.Sprintf("starting %s/build build\n", baseBuildDir)
-	assert.Equal(t, headerLine, line)
 
 	// This is not ideal, as it's timing dependend, ideally the script
 	// would signal somehow that it just echoed a line and the test

@@ -55,8 +55,6 @@ func runOsbuild(buildDir string, control *controlJSON, output io.Writer) (string
 
 	// use multi writer to get same output for stream and log
 	mw := io.MultiWriter(&wf, logf)
-	mw.Write([]byte(fmt.Sprintf("starting %s build\n", buildDir)))
-
 	outputDir := filepath.Join(buildDir, "output")
 	storeDir := filepath.Join(buildDir, "store")
 	cmd := exec.Command(osbuildBinary)
@@ -68,6 +66,7 @@ func runOsbuild(buildDir string, control *controlJSON, output io.Writer) (string
 	cmd.Env = append(cmd.Env, control.Environments...)
 	cmd.Args = append(cmd.Args, []string{"--output-dir", outputDir}...)
 	cmd.Args = append(cmd.Args, []string{"--store", storeDir}...)
+	cmd.Args = append(cmd.Args, "--json")
 	cmd.Args = append(cmd.Args, filepath.Join(buildDir, "manifest.json"))
 	if err := cmd.Start(); err != nil {
 		return "", err
