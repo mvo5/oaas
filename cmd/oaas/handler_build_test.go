@@ -210,3 +210,41 @@ func TestHandleIncludedSourcesBadTypes(t *testing.T) {
 		assert.EqualError(t, err, fmt.Sprintf("unsupported tar type %v", badType))
 	}
 }
+
+func TestHandleIncludedSourcesSparseFiles(t *testing.T) {
+	tmpdir := t.TempDir()
+
+	// setup fake store dir with sparse file
+	storeDir := filepath.Join(tmpdir, "/store")
+	err := os.MkdirAll(storeDir, 0755)
+	assert.NoError(t, err)
+	sparseFile := filepath.Join(storeDir, "sparse-file")
+	err = exec.Command("truncate", "-s", "10M", sparseFile).Run()
+	assert.NoError(t, err)
+	tarFilePath := filepath.Join(tmpdir, "test-sparse.tar")
+	cmd := exec.Command("tar", "-S", "-c", "-f", tarFilePath, "store/")
+	cmd.Dir = tmpdir
+	err = cmd.Run()
+	assert.NoError(t, err)
+
+	// pass it to our handler
+	f, err := os.Open(tarFilePath)
+	assert.NoError(t, err)
+	defer f.Close()
+
+	outDir := filepath.Join(tmpdir, "outdir")
+	err = os.MkdirAll(outDir, 0755)
+	assert.NoError(t, err)
+	err = main.HandleIncludedSources(tar.NewReader(f), outDir)
+	assert.NoError(t, err)
+
+	// and validate that it was written as a sparse file by du
+	outSparsePath := filepath.Join(outDir, "store/sparse-file")
+	duOutput, err := exec.Command("du", outSparsePath).CombinedOutput()
+	assert.NoError(t, err)
+	assert.Equal(t, fmt.Sprintf("0\t%s\n", outSparsePath), string(duOutput))
+	// but stat reports the right size
+	fi, err := os.Stat(outSparsePath)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(10*1024*1024), fi.Size())
+}
