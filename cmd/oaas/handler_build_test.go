@@ -252,8 +252,9 @@ func TestBuildStreamsOutput(t *testing.T) {
 	endpoint := baseURL + "api/v1/build"
 
 	restore := main.MockOsbuildBinary(t, fmt.Sprintf(`#!/bin/sh -e
-for i in $(seq 5); do
-   echo "line-$i"
+for i in $(seq 3); do
+   # generate the exact timestamp of the output line
+   echo "line-$i: $(date  +'%%s.%%N')"
    sleep 0.2
 done
 
@@ -271,21 +272,18 @@ echo "fake-build-result" > %[1]s/build/output/image/disk.img
 	assert.Equal(t, rsp.StatusCode, http.StatusCreated)
 	reader := bufio.NewReader(rsp.Body)
 
-	// This is not ideal, as it's timing dependend, ideally the script
-	// would signal somehow that it just echoed a line and the test
-	// code then expects to recieve it within e.g. 100ms.
-	start := time.Now()
-	for i := 1; i < 6; i++ {
+	var lineno, seconds, nano int64
+	for i := 1; i <= 3; i++ {
 		line, err := reader.ReadString('\n')
 		assert.NoError(t, err)
-		assert.Equal(t, fmt.Sprintf("line-%v\n", i), line)
-		timeSinceStart := time.Now().Sub(start)
-		// we expeced a line every 200ms and add a grace
-		// period of 100ms for slow systems (should be plenty
-		// but super busy GH runners can take a long time to
-		// do anything)
-		expectedTimeSinceStart := time.Duration(i)*200*time.Millisecond + (100 * time.Millisecond)
-		assert.True(t, timeSinceStart < expectedTimeSinceStart, fmt.Sprintf("time since start %v bigger than expected %v", timeSinceStart, expectedTimeSinceStart))
+		// the out contains when it was generated
+		_, err = fmt.Sscanf(line, "line-%d: %d.%d\n", &lineno, &seconds, &nano)
+		assert.NoError(t, err)
+		timeSinceOutput := time.Now().Sub(time.Unix(seconds, nano))
+		// we expect lines to appear right away, for really slow VMs
+		// we give a grace time of 200ms (which should be plenty and
+		// is also a bit arbitrary)
+		assert.True(t, timeSinceOutput < 200*time.Millisecond, fmt.Sprintf("output did not arrive in the expected time interval, delay: %v", timeSinceOutput))
 	}
 }
 
