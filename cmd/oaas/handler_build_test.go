@@ -24,6 +24,7 @@ func TestBuildMustPOST(t *testing.T) {
 	endpoint := baseURL + "api/v1/build"
 	rsp, err := http.Get(endpoint)
 	assert.NoError(t, err)
+	defer rsp.Body.Close()
 	assert.Equal(t, rsp.StatusCode, 405)
 	assert.Equal(t, loggerHook.LastEntry().Message, "handlerBuild called on /api/v1/build")
 }
@@ -47,6 +48,7 @@ func TestBuildChecksContentType(t *testing.T) {
 	endpoint := baseURL + "api/v1/build"
 	rsp, err := http.Post(endpoint, "random/encoding", nil)
 	assert.NoError(t, err)
+	defer rsp.Body.Close()
 	assert.Equal(t, rsp.StatusCode, http.StatusUnsupportedMediaType)
 	body, err := ioutil.ReadAll(rsp.Body)
 	assert.NoError(t, err)
@@ -101,6 +103,7 @@ echo "fake-build-result" > %[1]s/build/output/image/disk.img
 	rsp, err := http.Post(endpoint, "application/x-tar", buf)
 	assert.NoError(t, err)
 	defer ioutil.ReadAll(rsp.Body)
+	defer rsp.Body.Close()
 
 	assert.Equal(t, rsp.StatusCode, http.StatusCreated)
 	reader := bufio.NewReader(rsp.Body)
@@ -130,6 +133,7 @@ echo "fake-build-result" > %[1]s/build/output/image/disk.img
 	endpoint = baseURL + "api/v1/result/image/disk.img"
 	rsp, err = http.Get(endpoint)
 	assert.NoError(t, err)
+	defer rsp.Body.Close()
 	assert.Equal(t, http.StatusOK, rsp.StatusCode)
 	body, err := ioutil.ReadAll(rsp.Body)
 	assert.NoError(t, err)
@@ -139,6 +143,7 @@ echo "fake-build-result" > %[1]s/build/output/image/disk.img
 	endpoint = baseURL + "api/v1/result/output.tar"
 	rsp, err = http.Get(endpoint)
 	assert.NoError(t, err)
+	defer rsp.Body.Close()
 	assert.Equal(t, http.StatusOK, rsp.StatusCode)
 	body, err = ioutil.ReadAll(rsp.Body)
 	assert.NoError(t, err)
@@ -166,10 +171,12 @@ echo "fake-build-result" > %[1]s/build/output/image/disk.img
 	assert.NoError(t, err)
 	assert.Equal(t, rsp.StatusCode, http.StatusCreated)
 	defer ioutil.ReadAll(rsp.Body)
+	defer rsp.Body.Close()
 
 	buf = makeTestPost(t, `{"exports": ["tree"]}`, `{"fake": "manifest"}`)
 	rsp, err = http.Post(endpoint, "application/x-tar", buf)
 	assert.NoError(t, err)
+	defer rsp.Body.Close()
 	assert.Equal(t, rsp.StatusCode, http.StatusConflict)
 	assert.Equal(t, loggerHook.LastEntry().Message, main.ErrAlreadyBuilding.Error())
 }
@@ -232,6 +239,7 @@ exit 23
 	rsp, err := http.Post(endpoint, "application/x-tar", buf)
 	assert.NoError(t, err)
 	defer ioutil.ReadAll(rsp.Body)
+	defer rsp.Body.Close()
 
 	assert.Equal(t, rsp.StatusCode, http.StatusCreated)
 	reader := bufio.NewReader(rsp.Body)
@@ -247,6 +255,7 @@ cannot run osbuild: exit status 23`, buildDir)
 	endpoint = baseURL + "api/v1/result/image/disk.img"
 	rsp, err = http.Get(endpoint)
 	assert.NoError(t, err)
+	defer rsp.Body.Close()
 	assert.Equal(t, http.StatusBadRequest, rsp.StatusCode)
 	reader = bufio.NewReader(rsp.Body)
 	content, err = ioutil.ReadAll(reader)
@@ -274,6 +283,7 @@ echo "fake-build-result" > %[1]s/build/output/image/disk.img
 	rsp, err := http.Post(endpoint, "application/x-tar", buf)
 	assert.NoError(t, err)
 	defer ioutil.ReadAll(rsp.Body)
+	defer rsp.Body.Close()
 
 	assert.Equal(t, rsp.StatusCode, http.StatusCreated)
 	reader := bufio.NewReader(rsp.Body)
@@ -314,6 +324,7 @@ func TestBuildErrorHandlingTar(t *testing.T) {
 	buf := makeTestPost(t, `{"exports": ["tree"]}`, `{"fake": "manifest"}`)
 	rsp, err := http.Post(endpoint, "application/x-tar", buf)
 	assert.NoError(t, err)
+	defer rsp.Body.Close()
 	assert.Equal(t, rsp.StatusCode, http.StatusCreated)
 
 	body, err := ioutil.ReadAll(rsp.Body)
